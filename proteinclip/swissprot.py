@@ -285,7 +285,7 @@ def embed_function_descriptions(
         dat = {k: v for k, v in dat.items() if v["organism"] == "Homo sapiens (Human)"}
     function_texts = {k: v["function"] for k, v in dat.items()}
     embeddings = {
-        i: (gpt.get_openai_embedding(q, model=model) if q else np.zeros(1536))
+        i: (gpt.get_hf_embedding(q, model=model) if q else np.zeros(1024))
         for i, q in tqdm(function_texts.items(), desc=f"Embedding via {model}")
     }
 

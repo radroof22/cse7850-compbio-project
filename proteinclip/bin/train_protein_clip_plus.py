@@ -2,8 +2,10 @@ import os
 import json
 import argparse
 import logging
+import pickle
+import random
 
-
+import pandas as pd
 import torch
 from torch.utils import data
 import lightning.pytorch as pl
@@ -39,15 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Training configuration json file.",
     )
     parser.add_argument(
-        "dat",
-        type=os.path.abspath,
-        help="Data file to read for function text descriptions.",
-    )
-    parser.add_argument(
-        "protein_embed",
+        "proteinclip_embed",
         type=os.path.abspath,
         nargs="+",
-        help="Protein embeddings as precomputed .hdf5 files mapping <identifier, sequence> to use.",
+        help="Location of proteinclip embeddings. Should be `.parquet` with key 'proteinclip_embed'.",
+    )
+    parser.add_argument(
+        "structural_embed",
+        type=os.path.abspath,
+        nargs="+",
+        help="Location of structural embeddings embeddings. Should be `.pkl`",
     )
     parser.add_argument(
         "-s",
@@ -78,18 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "-g",
-        "--gpt",
-        type=str,
-        choices=[
-            "text-embedding-3-small",
-            "text-embedding-3-large",
-            "text-embedding-ada-002",
-        ],
-        default="text-embedding-3-small",
-        help="GPT embeddings to use.",
-    )
-    parser.add_argument(
         "--unitnorm",
         action="store_true",
         help="Unit normalize all inputs before feeding to projection network.",
@@ -112,27 +103,34 @@ def main():
     hyperparameters = hparams.read_hparams(args.training_config)
     logging.info(f"Hyperparameters: {hyperparameters}")
 
-    # Load precomputed ESM2 embeddings
-    esm_embeddings = data_utils.MultiH5(args.protein_embed)
+    # Load precomputed Structural embeddings
+    structural_embeddings = None
+    with open(args.structural_embed[0], "rb") as f:
+        structural_embeddings = pickle.load(f)
+    structural_embeddings = dict(zip(
+        structural_embeddings["protein_id"],
+        structural_embeddings["embedding"]
+    ))
 
-    # Load in the precomputed GPT text embeddings
-    sp_text_embed = swissprot.embed_function_descriptions(args.dat, model=args.gpt)
+    # Load in the ProteinCLIP embeddings
+    proteinclip_embeddings = pd.read_parquet(args.proteinclip_embed)
+    proteinclip_embeddings = dict(zip(
+        proteinclip_embeddings["id"],
+        proteinclip_embeddings["proteinclip_embed"]
+    ))
 
     # Identify shared keys
-    shared_keys = sorted(set(esm_embeddings.keys()).intersection(sp_text_embed.keys()))
+    shared_keys = sorted(set(proteinclip_embeddings.keys()).intersection(set(structural_embeddings.keys())))
+    random.seed(42)  # Set your desired seed here
+    random.shuffle(shared_keys)
 
     # Create dataset; first item is ESM, second is text
-    if args.pertoken:
-        dset = data_utils.CLIPDataset2D1D(
-            pairs=shared_keys, map1=esm_embeddings, map2=sp_text_embed
-        )
-    else:
-        dset = data_utils.CLIPDataset(
-            pairs=shared_keys,
-            map1=esm_embeddings,
-            map2=sp_text_embed,
-            enforce_unit_norm=args.unitnorm,
-        )
+    dset = data_utils.CLIPDataset(
+        pairs=shared_keys,
+        map1=proteinclip_embeddings,
+        map2=structural_embeddings,
+        enforce_unit_norm=args.unitnorm,
+    )
 
     # Create data splits
     if not args.splitfile:

@@ -437,6 +437,153 @@ def model_to_onnx(
         torch_out = model(x)
     assert np.allclose(to_numpy(torch_out), ort_outs[0], rtol=1e-03, atol=1e-05)
 
+class ContrastiveEmbedding3D(pl.LightningModule):
+    """Module for three‐way contrastive embeddings."""
+
+    def __init__(
+        self,
+        input_dim_1: int,
+        input_dim_2: int,
+        input_dim_3: int,
+        shared_dim: int,
+        num_hidden: int = 1,
+        lr: float = 1e-4,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["project_1", "project_2", "project_3"])
+
+        # three projectors into shared_dim with optional unit‐norm at output
+        self.project_1 = MLP(
+            input_dim_1, [input_dim_1] * num_hidden + [shared_dim], unit_norm=True
+        )
+        self.project_2 = MLP(
+            input_dim_2, [input_dim_2] * num_hidden + [shared_dim], unit_norm=True
+        )
+        self.project_3 = MLP(
+            input_dim_3, [input_dim_3] * num_hidden + [shared_dim], unit_norm=True
+        )
+
+        # learnable log‐temperature
+        self.t = torch.nn.Parameter(torch.tensor(1.0))
+
+    def write_config_json(self, path: str) -> None:
+        """Write the configuration to a json file."""
+        cfg = {
+            "input_dim_1": self.hparams.input_dim_1,
+            "input_dim_2": self.hparams.input_dim_2,
+            "input_dim_3": self.hparams.input_dim_3,
+            "shared_dim": self.hparams.shared_dim,
+            "lr": self.hparams.lr,
+            "num_hidden": self.hparams.num_hidden,
+        }
+        with open(path, "w") as f:
+            json.dump(cfg, f, indent=4)
+
+    def forward(
+        self,
+        x_1: torch.Tensor,
+        x_2: torch.Tensor,
+        x_3: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Project the three inputs to shared space and compute
+        average symmetric contrastive loss over all three pairs.
+        """
+        # project
+        p1 = self.project_1(x_1)  # [B, D]
+        p2 = self.project_2(x_2)
+        p3 = self.project_3(x_3)
+        temp = torch.exp(self.t.to(p1.device))
+
+        def sym_nce(a, b):
+            logits = (a @ b.T) * temp
+            labels = torch.arange(a.size(0), device=logits.device)
+            return 0.5 * (
+                F.cross_entropy(logits, labels) +
+                F.cross_entropy(logits.T, labels)
+            )
+
+        l12 = sym_nce(p1, p2)
+        l13 = sym_nce(p1, p3)
+        l23 = sym_nce(p2, p3)
+        return (l12 + l13 + l23) / 3
+
+    def _step(self, batch):
+        # support tuple or dict
+        if isinstance(batch, dict):
+            x1, x2, x3 = batch["x_1"], batch["x_2"], batch["x_3"]
+        else:
+            x1, x2, x3 = batch
+        return self.forward(x1, x2, x3)
+
+    def training_step(self, batch, batch_idx):
+        loss = self._step(batch)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss = self._step(batch)
+        self.log("val_loss", loss, prog_bar=True)
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, eps=1e-10)
+
+    def query(
+        self,
+        reference_set_1: Dict[Any, np.ndarray],
+        reference_set_2: Dict[Any, np.ndarray],
+        reference_set_3: Dict[Any, np.ndarray],
+        *,
+        query_1: Union[np.ndarray, torch.Tensor, None] = None,
+        query_2: Union[np.ndarray, torch.Tensor, None] = None,
+        query_3: Union[np.ndarray, torch.Tensor, None] = None,
+    ) -> Dict[str, List[Tuple[Any, float]]]:
+        """
+        Given three reference‐sets and exactly one query, return
+        rankings against the two other modalities.
+        """
+        provided = [query_1 is not None, query_2 is not None, query_3 is not None]
+        if sum(provided) != 1:
+            raise ValueError("Provide exactly one of query_1, query_2 or query_3.")
+
+        def to_tensor(x):
+            return x if isinstance(x, torch.Tensor) else torch.from_numpy(x).float()
+
+        def stack(refs):
+            keys, vals = zip(*refs.items())
+            return list(keys), torch.stack([to_tensor(v) for v in vals], dim=0)
+
+        k1, r1 = stack(reference_set_1)
+        k2, r2 = stack(reference_set_2)
+        k3, r3 = stack(reference_set_3)
+
+        with torch.no_grad():
+            if query_1 is not None:
+                q = self.project_1(to_tensor(query_1))
+                sims = {
+                    "to_mod2": (q @ self.project_2(r2).T).cpu().numpy(),
+                    "to_mod3": (q @ self.project_3(r3).T).cpu().numpy(),
+                }
+            elif query_2 is not None:
+                q = self.project_2(to_tensor(query_2))
+                sims = {
+                    "to_mod1": (q @ self.project_1(r1).T).cpu().numpy(),
+                    "to_mod3": (q @ self.project_3(r3).T).cpu().numpy(),
+                }
+            else:
+                q = self.project_3(to_tensor(query_3))
+                sims = {
+                    "to_mod1": (q @ self.project_1(r1).T).cpu().numpy(),
+                    "to_mod2": (q @ self.project_2(r2).T).cpu().numpy(),
+                }
+
+        results: Dict[str, List[Tuple[Any, float]]] = {}
+        for target, sim in sims.items():
+            keys = {"to_mod1": k1, "to_mod2": k2, "to_mod3": k3}[target]
+            results[target] = sorted(zip(keys, sim), key=lambda kv: -kv[1])
+
+        return results
+
 
 if __name__ == "__main__":
     # Toy run

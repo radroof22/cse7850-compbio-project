@@ -43,3 +43,4 @@ dependencies:
     - mpl-scatter-density
     - PyTDC
     - levenshtein
+    - h5py

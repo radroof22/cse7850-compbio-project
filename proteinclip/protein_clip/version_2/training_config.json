@@ -1,0 +1,17 @@
+{
+    "training_config": "/storage/ice1/2/4/rmehta98/cse7850-compbio-project/proteinclip/configs/clip_hparams.json",
+    "proteinclip_embed": [
+        "/storage/ice1/2/4/rmehta98/cse7850-compbio-project/proteinclip/protclip_embed_dataset.parquet"
+    ],
+    "structural_embed": [
+        "/storage/ice1/2/4/rmehta98/cse7850-compbio-project/data/structural/structural_embeddings_0_2000.pkl"
+    ],
+    "splitfile": "",
+    "pertoken": false,
+    "nhidden": 1,
+    "dim": 128,
+    "out": "/storage/ice1/2/4/rmehta98/cse7850-compbio-project/proteinclip",
+    "name": "protein_clip",
+    "unitnorm": false,
+    "gpu": 1
+}

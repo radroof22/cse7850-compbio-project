@@ -170,6 +170,7 @@ def embed_sequences(
             id_seq[start_idx:end_idx]
         )
         labels.extend(batch_labels)
+        print(len(labels))
         batch_lens = (batch_tokens != alphabet.padding_idx).sum(1)
         with torch.no_grad():
             results = m(

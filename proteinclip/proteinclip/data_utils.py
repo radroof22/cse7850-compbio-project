@@ -275,6 +275,81 @@ class MultiH5:
             h5.close()
 
 
+class CLIPDataset3D(Dataset):
+    """Dataset for three‐way CLIP embeddings.
+
+    Input can be a list of triples (one key per modality), or a list of single keys
+    present in all three maps. Returns dicts with 'x_1', 'x_2', 'x_3' arrays.
+    """
+
+    def __init__(
+        self,
+        triples: List[Tuple[Any, Any, Any]] | List[Any],
+        map1: Mapping[Any, np.ndarray],
+        map2: Mapping[Any, np.ndarray],
+        map3: Mapping[Any, np.ndarray],
+        enforce_unit_norm: bool = False,
+    ):
+        self.map1 = map1
+        self.map2 = map2
+        self.map3 = map3
+        self.enforce_unit_norm = enforce_unit_norm
+
+        # filter out missing/zero embeddings
+        orig_len = len(triples)
+        self.triples: List[Tuple[Any, Any, Any]] = []
+        for item in tqdm(triples, desc="Checking for missing/zero embeddings"):
+            if isinstance(item, (tuple, list)) and len(item) == 3:
+                k1, k2, k3 = item
+            else:
+                k1 = k2 = k3 = item
+
+            v1 = self.map1.get(k1, 0)
+            v2 = self.map2.get(k2, 0)
+            v3 = self.map3.get(k3, 0)
+            if np.allclose(v1, np.zeros_like(v1)) or np.allclose(v2, np.zeros_like(v2)) or np.allclose(v3, np.zeros_like(v3)):
+                continue
+            self.triples.append((k1, k2, k3))
+
+        logging.info(
+            f"Trimmed {orig_len - len(self.triples)} triples with missing/zero embeddings; "
+            f"{len(self.triples)} remain."
+        )
+
+    def unique_vectors_map1(self, as_dict: bool = False) -> Union[Dict[Any, np.ndarray], np.ndarray]:
+        keys = sorted({k1 for k1, _, _ in self.triples})
+        if as_dict:
+            return {k: self.map1[k] for k in keys}
+        return np.array([self.map1[k] for k in keys])
+
+    def unique_vectors_map2(self, as_dict: bool = False) -> Union[Dict[Any, np.ndarray], np.ndarray]:
+        keys = sorted({k2 for _, k2, _ in self.triples})
+        if as_dict:
+            return {k: self.map2[k] for k in keys}
+        return np.array([self.map2[k] for k in keys])
+
+    def unique_vectors_map3(self, as_dict: bool = False) -> Union[Dict[Any, np.ndarray], np.ndarray]:
+        keys = sorted({k3 for _, _, k3 in self.triples})
+        if as_dict:
+            return {k: self.map3[k] for k in keys}
+        return np.array([self.map3[k] for k in keys])
+
+    def __len__(self) -> int:
+        return len(self.triples)
+
+    def __getitem__(self, index: int) -> Dict[str, np.ndarray]:
+        k1, k2, k3 = self.triples[index]
+        e1 = np.array(self.map1[k1], dtype=np.float32)
+        e2 = np.array(self.map2[k2], dtype=np.float32)
+        e3 = np.array(self.map3[k3], dtype=np.float32)
+
+        if self.enforce_unit_norm:
+            e1 /= np.linalg.norm(e1) + 1e-12
+            e2 /= np.linalg.norm(e2) + 1e-12
+            e3 /= np.linalg.norm(e3) + 1e-12
+
+        return {"x_1": e1, "x_2": e2, "x_3": e3}
+
 def array_unique_rows(arr: np.ndarray) -> np.ndarray:
     """Get the unique rows of an array."""
     retval = []

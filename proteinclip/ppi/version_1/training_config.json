@@ -1,0 +1,7 @@
+{
+    "training_config": "/home/hice1/smamidipaka3/scratch/cse7850-compbio-project/proteinclip/configs/token_clip_hparams.json",
+    "clip": "/home/hice1/smamidipaka3/scratch/cse7850-compbio-project/proteinclip/protein_clip/version_2/",
+    "clipnum": 1,
+    "out": "/storage/ice1/9/2/smamidipaka3/cse7850-compbio-project/proteinclip",
+    "name": "ppi"
+}

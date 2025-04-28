@@ -1,0 +1,4 @@
+model, accuracy
+pc+_project_1_10000.onnx, 0.612
+pc_project_1_10000.onnx, 0.594
+project3d_2_10000.onnx, 0.634

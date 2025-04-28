@@ -16,6 +16,9 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 from tqdm.auto import tqdm
 
+import sys
+import os
+
 from proteinclip import contrastive
 from proteinclip import data_utils
 from proteinclip import hparams
@@ -105,21 +108,29 @@ def main():
 
     # Load in the embeddings that we are using based on ESM size; filter to only
     # keep embeddings that are present in interaction pairs
+    # base_path = Path("/home/wukevin/projects/gpt-protein-results")
     base_path = Path("/home/wukevin/projects/gpt-protein-results")
-    full_embed_map = data_utils.MultiH5(
-        [
-            base_path / p
-            for p in (
-                clip_training_config.get("esm")
-                or clip_training_config.get("protein_embed")
-            )
-        ]
-    )
+    # full_embed_map = data_utils.MultiH5(
+    #     [
+    #         base_path / p
+    #         for p in (
+    #             clip_training_config.get("esm")
+    #             or clip_training_config.get("proteinclip_embed")
+    #         )
+    #     ]
+    # )
+
+    full_embed_map = pd.read_parquet('/home/hice1/smamidipaka3/scratch/cse7850-compbio-project/proteinclip/protclip_embed_dataset.parquet')
+    # embed_map = {
+    #     k: v
+    #     for k, v in tqdm(full_embed_map.items(), desc="Loading relevant embeddings")
+    #     if k in all_keys
+    # }
     embed_map = {
-        k: v
-        for k, v in tqdm(full_embed_map.items(), desc="Loading relevant embeddings")
-        if k in all_keys
-    }
+    row['id']: torch.from_numpy(row['proteinclip_embed']).float().numpy()  # Cast to Float32
+    for _, row in tqdm(full_embed_map.iterrows(), desc="Loading relevant embeddings")
+    if row['id'] in all_keys
+}
     logging.info(f"Loaded {len(embed_map)} relevant embeddings")
 
     # Handle unit norming
@@ -191,6 +202,7 @@ def main():
         callbacks=[ckpt_callback],
         log_every_n_steps=1,
         deterministic=True,
+        devices=1
     )
     trainer.fit(net, train_dataloaders=train_dl, val_dataloaders=valid_dl)
 
